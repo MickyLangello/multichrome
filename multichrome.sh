@@ -38,7 +38,6 @@ SITE_URLS=("https://claude.ai" "about:blank")
 # Создаем базовую директорию, если её нет
 mkdir -p "$BASE_PROFILE_DIR"
 
-# Главный цикл скрипта
 while true; do
     clear
     echo -e "${CYAN}=== Мульти-профильный запуск Chrome ===${NC}"
@@ -112,7 +111,6 @@ while true; do
             COLOR=$YELLOW
         fi
 
-        # Форматирование с ровными отступами
         printf "${COLOR}[%-3d] %-${MAX_NAME_LEN}s | %s${NC}\n" "$INDEX" "$prof" "$last_launch"
         ((INDEX++))
     done
@@ -139,7 +137,6 @@ while true; do
             if [ "$prof_input" -eq "$NEW_PROFILE_INDEX" ]; then
                 # Создание нового профиля
                 read -p "Введите имя нового профиля: " new_name
-                # Простая проверка на пустую строку и недопустимые символы (слеш)
                 if [[ -n "$new_name" ]] && [[ "$new_name" != *"/"* ]]; then
                     SELECTED_PROFILE="$new_name"
                     SELECTED_MODE="normal"
