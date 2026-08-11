@@ -9,7 +9,6 @@ if (-not (Test-Path -Path $BaseProfileDir)) {
     New-Item -ItemType Directory -Path $BaseProfileDir | Out-Null
 }
 
-# 1) Добавлена пустая страница вторым пунктом
 $Sites = @(
     [pscustomobject]@{ Name = "Claude AI"; Url = "https://claude.ai" }
     [pscustomobject]@{ Name = "Пустая страница"; Url = "about:blank" }
@@ -32,7 +31,6 @@ $Sites = @(
     $SiteValid = $false
     $SelectedUrl = ""
     while (-not $SiteValid) {
-        # 2) Нажатие Enter автоматически выбирает 1
         $SiteInput = Read-Host "Введите номер сайта (Enter = 1)"
         if ($SiteInput -eq "") { $SiteInput = "1" }
 
@@ -62,7 +60,6 @@ $Sites = @(
         $LastLaunch = "Никогда"
         
         if (Test-Path -Path $ModeFile) {
-            # Читаем файл как массив строк
             $Lines = @(Get-Content -Path $ModeFile)
             if ($Lines.Count -ge 1 -and $Lines[0].Trim() -ne "") { $Mode = $Lines[0].Trim() }
             if ($Lines.Count -ge 2 -and $Lines[1].Trim() -ne "") { $LastLaunch = $Lines[1].Trim() }
@@ -77,7 +74,6 @@ $Sites = @(
     foreach ($P in $ProfileData) {
         $Color = if ($P.Mode -eq 'app') { 'Green' } else { 'Yellow' }
         
-        # 4) Форматирование с ровными отступами
         $IndexStr = "[$Index]".PadRight(5)
         $NameStr = $P.Name.PadRight($MaxNameLen + 2)
         
@@ -98,7 +94,6 @@ $Sites = @(
     $SelectedLastLaunch = ""
 
     while (-not $ProfileValid) {
-        # 2) Нажатие Enter автоматически выбирает 1
         $ProfileInput = Read-Host "Введите номер профиля (Enter = 1)"
         if ($ProfileInput -eq "") { $ProfileInput = "1" }
         
@@ -156,14 +151,12 @@ $Sites = @(
         Write-Host "[2] Изменить режим запуска" -ForegroundColor DarkGray
         Write-Host "[0] Назад в главное меню" -ForegroundColor Red
 
-        # 2) Нажатие Enter автоматически выбирает 1
         $Action = Read-Host "Выберите действие (Enter = 1)"
         if ($Action -eq "") { $Action = "1" }
         
         if ($Action -eq '1') {
             $ReadyToLaunch = $true
             
-            # 3) Обновляем время запуска перед открытием Chrome
             $SelectedLastLaunch = Get-Date -Format "dd.MM.yyyy HH:mm:ss"
             Set-Content -Path $ModeFile -Value @($SelectedMode, $SelectedLastLaunch)
             
