@@ -38,8 +38,9 @@ $Sites = @(
             Write-Host "Завершение работы..." -ForegroundColor DarkGray
             exit
         }
-        if ([int]::TryParse($SiteInput, [ref]$null) -and $SiteInput -ge 1 -and $SiteInput -le $Sites.Count) {
-            $SelectedUrl = $Sites[$SiteInput - 1].Url
+        $SiteNum = 0
+        if ([int]::TryParse($SiteInput, [ref]$SiteNum) -and $SiteNum -ge 1 -and $SiteNum -le $Sites.Count) {
+            $SelectedUrl = $Sites[$SiteNum - 1].Url
             $SiteValid = $true
         } else {
             Write-Host "Неверный ввод." -ForegroundColor Red
@@ -101,8 +102,8 @@ $Sites = @(
             continue MainLoop
         }
 
-        if ([int]::TryParse($ProfileInput, [ref]$null) -and $ProfileInput -ge 1 -and $ProfileInput -le $NewProfileIndex) {
-            $InputInt = [int]$ProfileInput
+        $InputInt = 0
+        if ([int]::TryParse($ProfileInput, [ref]$InputInt) -and $InputInt -ge 1 -and $InputInt -le $NewProfileIndex) {
             
             # --- СОЗДАНИЕ НОВОГО ПРОФИЛЯ ---
             if ($InputInt -eq $NewProfileIndex) {
