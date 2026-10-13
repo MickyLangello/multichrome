@@ -3,7 +3,7 @@
 Скрипт для мульти-профильного запуска Chrome с сохранением режима, времени запуска и созданием ярлыков.
 #>
 
-$BaseProfileDir = "D:\files\ChromeProfiles"
+$BaseProfileDir = "C:\ChromeProfiles"
 
 if (-not (Test-Path -Path $BaseProfileDir)) {
     New-Item -ItemType Directory -Path $BaseProfileDir | Out-Null
