@@ -1,12 +1,106 @@
-﻿<#
+<#
 .SYNOPSIS
-Скрипт для мульти-профильного запуска Chrome с сохранением режима и времени запуска.
+Скрипт для мульти-профильного запуска Chrome с сохранением режима, времени запуска и созданием ярлыков.
 #>
 
-$BaseProfileDir = "C:\ChromeProfiles"
+$BaseProfileDir = "D:\files\ChromeProfiles"
 
 if (-not (Test-Path -Path $BaseProfileDir)) {
     New-Item -ItemType Directory -Path $BaseProfileDir | Out-Null
+}
+
+# Служебная папка для иконок: "<Имя сайта из $Sites>.ico"
+$IconsDir = Join-Path -Path $BaseProfileDir -ChildPath ".icons"
+if (-not (Test-Path -Path $IconsDir)) {
+    New-Item -ItemType Directory -Path $IconsDir | Out-Null
+}
+
+# Поиск chrome.exe
+function Get-ChromePath {
+    $RegKeys = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+    )
+    foreach ($Key in $RegKeys) {
+        $Path = (Get-ItemProperty -Path $Key -ErrorAction SilentlyContinue).'(default)'
+        if ($Path -and (Test-Path -Path $Path)) { return $Path }
+    }
+    $Candidates = @(
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+    )
+    foreach ($C in $Candidates) {
+        if (Test-Path -Path $C) { return $C }
+    }
+    return $null
+}
+
+# Создание ярлыка на рабочем столе с текущими параметрами запуска
+function New-ChromeShortcut {
+    param(
+        [string]$SiteName,
+        [string]$ProfileName,
+        [string]$Arguments
+    )
+
+    $ChromePath = Get-ChromePath
+    if (-not $ChromePath) {
+        Write-Host "Не удалось найти chrome.exe. Ярлык не создан." -ForegroundColor Red
+        return
+    }
+
+    # Иконка: "<Имя сайта>.ico" в .icons, иначе иконка Chrome
+    $IconFile = Join-Path -Path $IconsDir -ChildPath "$SiteName.ico"
+    if (Test-Path -Path $IconFile) {
+        $IconLocation = "$IconFile,0"
+        $IconInfo = "иконка: $SiteName.ico"
+    } else {
+        $IconLocation = "$ChromePath,0"
+        $IconInfo = "иконка Chrome (файл '$SiteName.ico' не найден в $IconsDir)"
+    }
+
+    # Имя ярлыка без запрещённых символов
+    $BadChars = [System.IO.Path]::GetInvalidFileNameChars()
+    $LinkName = "$SiteName - $ProfileName"
+    foreach ($Ch in $BadChars) { $LinkName = $LinkName.Replace([string]$Ch, "_") }
+
+    try {
+        $Desktop = [Environment]::GetFolderPath("Desktop")
+        $LinkPath = Join-Path -Path $Desktop -ChildPath "$LinkName.lnk"
+
+        $Shell = New-Object -ComObject WScript.Shell
+        $Shortcut = $Shell.CreateShortcut($LinkPath)
+        $Shortcut.TargetPath = $ChromePath
+        $Shortcut.Arguments = $Arguments
+        $Shortcut.WorkingDirectory = Split-Path -Path $ChromePath
+        $Shortcut.IconLocation = $IconLocation
+        $Shortcut.Description = "$SiteName ($ProfileName)"
+        $Shortcut.Save()
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($Shell)
+
+        Write-Host "Ярлык создан: $LinkPath" -ForegroundColor Green
+        Write-Host "($IconInfo)" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "Ошибка при создании ярлыка: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Формирование аргументов Chrome
+function Get-ChromeArgs {
+    param([string]$ProfilePath, [string]$Url, [string]$Mode)
+
+    $Result = @(
+        "--user-data-dir=`"$ProfilePath`"",
+        "--no-first-run",
+        "--no-default-browser-check"
+    )
+    if ($Mode -eq 'app') {
+        $Result += "--app=`"$Url`""
+    } else {
+        $Result += "`"$Url`""
+    }
+    return $Result
 }
 
 $Sites = @(
@@ -30,6 +124,7 @@ $Sites = @(
 
     $SiteValid = $false
     $SelectedUrl = ""
+    $SelectedSiteName = ""
     while (-not $SiteValid) {
         $SiteInput = Read-Host "Введите номер сайта (Enter = 1)"
         if ($SiteInput -eq "") { $SiteInput = "1" }
@@ -41,6 +136,7 @@ $Sites = @(
         $SiteNum = 0
         if ([int]::TryParse($SiteInput, [ref]$SiteNum) -and $SiteNum -ge 1 -and $SiteNum -le $Sites.Count) {
             $SelectedUrl = $Sites[$SiteNum - 1].Url
+            $SelectedSiteName = $Sites[$SiteNum - 1].Name
             $SiteValid = $true
         } else {
             Write-Host "Неверный ввод." -ForegroundColor Red
@@ -50,7 +146,9 @@ $Sites = @(
     Write-Host ""
 
     # --- 2. ЧТЕНИЕ И ВЫБОР ПРОФИЛЯ ---
-    $ExistingProfiles = Get-ChildItem -Path $BaseProfileDir -Directory | Select-Object -ExpandProperty Name
+    $ExistingProfiles = Get-ChildItem -Path $BaseProfileDir -Directory |
+        Where-Object { -not $_.Name.StartsWith('.') } |
+        Select-Object -ExpandProperty Name
     $ProfileData = @()
     $MaxNameLen = 20 # Минимальная ширина столбца для имен
 
@@ -61,6 +159,7 @@ $Sites = @(
         $LastLaunch = "Никогда"
         
         if (Test-Path -Path $ModeFile) {
+            # Читаем файл как массив строк
             $Lines = @(Get-Content -Path $ModeFile)
             if ($Lines.Count -ge 1 -and $Lines[0].Trim() -ne "") { $Mode = $Lines[0].Trim() }
             if ($Lines.Count -ge 2 -and $Lines[1].Trim() -ne "") { $LastLaunch = $Lines[1].Trim() }
@@ -142,6 +241,7 @@ $Sites = @(
     $ReadyToLaunch = $false
     while (-not $ReadyToLaunch) {
         Write-Host "`n--- Настройка запуска ---" -ForegroundColor Cyan
+        Write-Host "Сайт: $SelectedSiteName"
         Write-Host "Профиль: $SelectedProfile"
         
         $CurrentColor = if ($SelectedMode -eq 'app') { 'Green' } else { 'Yellow' }
@@ -150,6 +250,7 @@ $Sites = @(
 
         Write-Host "[1] ЗАПУСТИТЬ" -ForegroundColor White
         Write-Host "[2] Изменить режим запуска" -ForegroundColor DarkGray
+        Write-Host "[3] Создать ярлык на рабочем столе" -ForegroundColor DarkGray
         Write-Host "[0] Назад в главное меню" -ForegroundColor Red
 
         $Action = Read-Host "Выберите действие (Enter = 1)"
@@ -166,6 +267,9 @@ $Sites = @(
             $SelectedMode = if ($SelectedMode -eq 'app') { 'normal' } else { 'app' }
             Set-Content -Path $ModeFile -Value @($SelectedMode, $SelectedLastLaunch)
             Write-Host "Режим изменен и сохранен!" -ForegroundColor Green
+        } elseif ($Action -eq '3') {
+            $ShortcutArgs = (Get-ChromeArgs -ProfilePath $ProfilePath -Url $SelectedUrl -Mode $SelectedMode) -join ' '
+            New-ChromeShortcut -SiteName $SelectedSiteName -ProfileName $SelectedProfile -Arguments $ShortcutArgs
         } elseif ($Action -eq '0') {
             continue MainLoop
         }
@@ -174,17 +278,7 @@ $Sites = @(
     # --- 4. ЗАПУСК CHROME ---
     Write-Host "`nЗапускаем Chrome..." -ForegroundColor Cyan
 
-    $ChromeArgs = @(
-        "--user-data-dir=`"$ProfilePath`"",
-        "--no-first-run",
-        "--no-default-browser-check"
-    )
-
-    if ($SelectedMode -eq 'app') {
-        $ChromeArgs += "--app=`"$SelectedUrl`""
-    } else {
-        $ChromeArgs += "`"$SelectedUrl`""
-    }
+    $ChromeArgs = Get-ChromeArgs -ProfilePath $ProfilePath -Url $SelectedUrl -Mode $SelectedMode
 
     try {
         Start-Process -FilePath "chrome.exe" -ArgumentList $ChromeArgs
