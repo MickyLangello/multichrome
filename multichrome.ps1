@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Скрипт для мульти-профильного запуска Chrome с сохранением режима, времени запуска и созданием ярлыков.
+Скрипт для мульти-профильного запуска Chrome с сохранением режима, времени запуска, созданием ярлыков и очисткой кэша.
 #>
 
 $BaseProfileDir = "C:\ChromeProfiles"
@@ -15,7 +15,32 @@ if (-not (Test-Path -Path $IconsDir)) {
     New-Item -ItemType Directory -Path $IconsDir | Out-Null
 }
 
-# Поиск chrome.exe
+# Папки кэша, которые Chrome безопасно пересоздаёт сам (логины, куки, история, закладки НЕ затрагиваются)
+# Относительно корня профиля (--user-data-dir)
+$RootCacheTargets = @(
+    "GrShaderCache",
+    "ShaderCache",
+    "GraphiteDawnCache",
+    "GPUPersistentCache",
+    "component_crx_cache",
+    "extensions_crx_cache",
+    "Crashpad\reports",
+    "Snapshots"
+    # "optimization_guide_model_store"   # Раскомментируйте, чтобы чистить и ML-модели (.tflite), Chrome скачает их заново
+)
+# Относительно подпапки профиля Chrome (Default, Profile 1, ...)
+$ProfileCacheTargets = @(
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnWebGPUCache",
+    "DawnGraphiteCache",
+    "Media Cache",
+    "Service Worker\CacheStorage",
+    "Service Worker\ScriptCache"
+)
+
+# Поиск chrome.exe (нужен полный путь для ярлыка)
 function Get-ChromePath {
     $RegKeys = @(
         "HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
@@ -103,9 +128,145 @@ function Get-ChromeArgs {
     return $Result
 }
 
+# Размер папки в байтах (0, если папки нет)
+function Get-FolderSize {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return [long]0 }
+    $Sum = (Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue |
+        Measure-Object -Property Length -Sum).Sum
+    if ($null -eq $Sum) { return [long]0 }
+    return [long]$Sum
+}
+
+# Человекочитаемый размер
+function Format-FileSize {
+    param([long]$Bytes)
+
+    if ($Bytes -ge 1GB) { return ("{0:N2} ГиБ" -f ($Bytes / 1GB)) }
+    if ($Bytes -ge 1MB) { return ("{0:N2} МиБ" -f ($Bytes / 1MB)) }
+    if ($Bytes -ge 1KB) { return ("{0:N2} КиБ" -f ($Bytes / 1KB)) }
+    return "$Bytes байт"
+}
+
+# Запущен ли сейчас Chrome с этим профилем (иначе файлы кэша заблокированы)
+function Test-ProfileInUse {
+    param([string]$ProfilePath)
+
+    $Pattern = '--user-data-dir="?' + [regex]::Escape($ProfilePath) + '"?(\s|$)'
+    $Procs = Get-CimInstance -ClassName Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue
+    foreach ($Proc in $Procs) {
+        if ($Proc.CommandLine -and $Proc.CommandLine -match $Pattern) { return $true }
+    }
+    return $false
+}
+
+# Список существующих папок кэша для профиля
+function Get-CacheTargets {
+    param([string]$ProfilePath)
+
+    $Found = @()
+    foreach ($Rel in $RootCacheTargets) {
+        $Full = Join-Path -Path $ProfilePath -ChildPath $Rel
+        if (Test-Path -LiteralPath $Full) { $Found += $Full }
+    }
+
+    # Подпапки профилей Chrome (Default, Profile 1, ...) определяем по наличию файла Preferences
+    $ChromeProfiles = Get-ChildItem -LiteralPath $ProfilePath -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path -Path $_.FullName -ChildPath "Preferences") }
+    foreach ($Sub in $ChromeProfiles) {
+        foreach ($Rel in $ProfileCacheTargets) {
+            $Full = Join-Path -Path $Sub.FullName -ChildPath $Rel
+            if (Test-Path -LiteralPath $Full) { $Found += $Full }
+        }
+    }
+    return $Found
+}
+
+# Очистка кэша во всех профилях
+function Clear-AllChromeCache {
+    Clear-Host
+    Write-Host "=== Очистка кэша Chrome во всех профилях ===" -ForegroundColor Cyan
+    Write-Host "Папка профилей: $BaseProfileDir" -ForegroundColor DarkGray
+    Write-Host "Логины, куки, история и закладки не затрагиваются." -ForegroundColor DarkGray
+    Write-Host ""
+
+    $Profiles = @(Get-ChildItem -Path $BaseProfileDir -Directory |
+        Where-Object { -not $_.Name.StartsWith('.') })
+    if ($Profiles.Count -eq 0) {
+        Write-Host "Профили не найдены." -ForegroundColor Yellow
+        [void](Read-Host "Нажмите Enter для возврата")
+        return
+    }
+
+    # Предварительный анализ: что можно очистить и сколько это займёт места
+    Write-Host "Анализ профилей..." -ForegroundColor DarkGray
+    $Plan = @()
+    $MaxNameLen = 20
+    foreach ($Prof in $Profiles) {
+        $InUse = Test-ProfileInUse -ProfilePath $Prof.FullName
+        $Targets = @(Get-CacheTargets -ProfilePath $Prof.FullName)
+        $Size = [long]0
+        if (-not $InUse) {
+            foreach ($T in $Targets) { $Size += Get-FolderSize -Path $T }
+        }
+        if ($Prof.Name.Length -gt $MaxNameLen) { $MaxNameLen = $Prof.Name.Length }
+        $Plan += [pscustomobject]@{ Name = $Prof.Name; Targets = $Targets; InUse = $InUse; Size = $Size }
+    }
+
+    Write-Host ""
+    $TotalSize = [long]0
+    foreach ($Item in $Plan) {
+        $NameStr = $Item.Name.PadRight($MaxNameLen + 2)
+        if ($Item.InUse) {
+            Write-Host ("{0} | Chrome запущен, будет пропущен" -f $NameStr) -ForegroundColor Red
+        } else {
+            Write-Host ("{0} | {1}" -f $NameStr, (Format-FileSize -Bytes $Item.Size)) -ForegroundColor Yellow
+            $TotalSize += $Item.Size
+        }
+    }
+    Write-Host ""
+    Write-Host ("Будет освобождено: {0}" -f (Format-FileSize -Bytes $TotalSize)) -ForegroundColor White
+
+    if ($TotalSize -eq 0) {
+        Write-Host "Очищать нечего." -ForegroundColor Green
+        [void](Read-Host "Нажмите Enter для возврата")
+        return
+    }
+
+    Write-Host "[1] ОЧИСТИТЬ" -ForegroundColor White
+    Write-Host "[0] Отмена" -ForegroundColor Red
+    $Confirm = Read-Host "Выберите действие (Enter = 1)"
+    if ($Confirm -eq "") { $Confirm = "1" }
+    if ($Confirm -ne '1') { return }
+
+    # Удаление
+    Write-Host ""
+    $TotalFreed = [long]0
+    foreach ($Item in $Plan) {
+        if ($Item.InUse) {
+            Write-Host "Пропущен (Chrome запущен): $($Item.Name)" -ForegroundColor Red
+            continue
+        }
+        $Before = $Item.Size
+        foreach ($T in $Item.Targets) {
+            Remove-Item -LiteralPath $T -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $After = [long]0
+        foreach ($T in $Item.Targets) { $After += Get-FolderSize -Path $T }
+        $Freed = $Before - $After
+        $TotalFreed += $Freed
+        Write-Host ("Очищен: {0} ({1})" -f $Item.Name, (Format-FileSize -Bytes $Freed)) -ForegroundColor Green
+    }
+
+    Write-Host ""
+    Write-Host ("Готово! Всего освобождено: {0}" -f (Format-FileSize -Bytes $TotalFreed)) -ForegroundColor Cyan
+    [void](Read-Host "Нажмите Enter для возврата")
+}
+
 $Sites = @(
     [pscustomobject]@{ Name = "Claude AI"; Url = "https://claude.ai" }
-    [pscustomobject]@{ Name = "Пустая страница"; Url = "about:blank" }
+    [pscustomobject]@{ Name = "Пустая страница"; Url = "chrome://newtab/" }
 )
 
 # Главный цикл скрипта
@@ -120,6 +281,7 @@ $Sites = @(
     for ($i = 0; $i -lt $Sites.Count; $i++) {
         Write-Host ("[{0}] {1}" -f ($i + 1), $Sites[$i].Name)
     }
+    Write-Host "[-1] Очистить кэш во всех профилях" -ForegroundColor Magenta
     Write-Host "[0] Выход из скрипта" -ForegroundColor Red
 
     $SiteValid = $false
@@ -132,6 +294,10 @@ $Sites = @(
         if ($SiteInput -eq '0') {
             Write-Host "Завершение работы..." -ForegroundColor DarkGray
             exit
+        }
+        if ($SiteInput -eq '-1') {
+            Clear-AllChromeCache
+            continue MainLoop
         }
         $SiteNum = 0
         if ([int]::TryParse($SiteInput, [ref]$SiteNum) -and $SiteNum -ge 1 -and $SiteNum -le $Sites.Count) {
